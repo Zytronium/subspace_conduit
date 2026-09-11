@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rustls::pki_types::ServerName;
 use serde::Serialize;
@@ -13,6 +14,7 @@ use crate::trust::KnownHostsStore;
 
 const CHUNK_SIZE: usize = 64 * 1024;
 const SERVER_NAME: &str = "subspace-conduit.local";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type ClientStream = MessageStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 
@@ -33,12 +35,18 @@ pub struct ProbeResult {
 
 // -------- probe: capture a server's cert fingerprint without trusting it --------
 pub async fn probe_fingerprint(addr: &str, store: &KnownHostsStore) -> anyhow::Result<ProbeResult> {
-    let socket = tokio::net::TcpStream::connect(addr).await?;
+    let socket = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out connecting to {addr}"))??;
+
     let config = crate::tls::build_peek_client_config();
     let connector = TlsConnector::from(config);
     let server_name = ServerName::try_from(SERVER_NAME)?.to_owned();
 
-    let tls_stream = connector.connect(server_name, socket).await?;
+    let tls_stream = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(server_name, socket))
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out during TLS handshake with {addr}"))??;
+
     let certs = tls_stream.get_ref().1.peer_certificates()
         .ok_or_else(|| anyhow::anyhow!("server presented no certificate"))?;
     let leaf = certs.first().ok_or_else(|| anyhow::anyhow!("empty certificate chain"))?;
@@ -61,11 +69,18 @@ pub fn trust_server(store: &KnownHostsStore, host_key: &str, fingerprint: &str) 
 
 // -------- connect for real, using a verifier that requires an already-known match --------
 pub async fn connect(addr: &str, store: Arc<KnownHostsStore>) -> anyhow::Result<ClientStream> {
-    let socket = tokio::net::TcpStream::connect(addr).await?;
+    let socket = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out connecting to {addr}"))??;
+
     let config = crate::tls::build_strict_client_config(store);
     let connector = TlsConnector::from(config);
     let server_name = ServerName::try_from(SERVER_NAME)?.to_owned();
-    let tls_stream = connector.connect(server_name, socket).await?;
+
+    let tls_stream = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(server_name, socket))
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out during TLS handshake with {addr}"))??;
+
     let mut stream = new_stream(tls_stream);
 
     let hello = Message::Hello(Hello {
