@@ -77,15 +77,15 @@ pub fn build_peek_client_config() -> Arc<ClientConfig> {
 #[derive(Debug)]
 struct StrictVerifier {
     store: Arc<crate::trust::KnownHostsStore>,
+    host_key: String,
 }
 
 impl ServerCertVerifier for StrictVerifier {
-    fn verify_server_cert(&self, end_entity: &CertificateDer<'_>, _i: &[CertificateDer<'_>], server_name: &ServerName<'_>, _o: &[u8], _n: UnixTime) -> Result<ServerCertVerified, rustls::Error> {
+    fn verify_server_cert(&self, end_entity: &CertificateDer<'_>, _i: &[CertificateDer<'_>], _server_name: &ServerName<'_>, _o: &[u8], _n: UnixTime) -> Result<ServerCertVerified, rustls::Error> {
         let fingerprint = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(end_entity.as_ref()));
-        let host_key = format!("{server_name:?}");
-        match self.store.known_fingerprint(&host_key) {
+        match self.store.known_fingerprint(&self.host_key) {
             Some(known) if known == fingerprint => Ok(ServerCertVerified::assertion()),
-            Some(_) => Err(rustls::Error::General("fingerprint mismatch, trust was revoked or server changed".into())),
+            Some(_) => Err(rustls::Error::General(format!("fingerprint mismatch for {}, trust was revoked or server changed", self.host_key))),
             None => Err(rustls::Error::General("server not yet trusted, probe and confirm first".into())),
         }
     }
@@ -100,11 +100,11 @@ impl ServerCertVerifier for StrictVerifier {
     }
 }
 
-pub fn build_strict_client_config(store: Arc<crate::trust::KnownHostsStore>) -> Arc<ClientConfig> {
+pub fn build_strict_client_config(store: Arc<crate::trust::KnownHostsStore>, host_key: String) -> Arc<ClientConfig> {
     Arc::new(
         ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(StrictVerifier { store }))
+            .with_custom_certificate_verifier(Arc::new(StrictVerifier { store, host_key }))
             .with_no_client_auth(),
     )
 }

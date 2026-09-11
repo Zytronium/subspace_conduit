@@ -22,7 +22,8 @@ pub async fn run(addr: &str, action: Action) -> anyhow::Result<()> {
     let socket = tokio::net::TcpStream::connect(addr).await?;
 
     let store = Arc::new(KnownHostsStore::load()?);
-    let tls_config = tofu::build_client_config(store);
+    let host_key = subspace_conduit_core::api::endpoint_host_key(addr);
+    let tls_config = tofu::build_client_config(store, host_key);
     let connector = TlsConnector::from(tls_config);
     let server_name = ServerName::try_from("subspace-conduit.local")?.to_owned();
     let tls_stream = connector.connect(server_name, socket).await?;

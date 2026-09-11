@@ -33,6 +33,23 @@ pub struct ProbeResult {
     pub status: TrustStatus,
 }
 
+pub fn endpoint_host_key(addr: &str) -> String {
+    format!("tcp://{addr}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::endpoint_host_key;
+
+    #[test]
+    fn endpoint_host_keys_are_distinct() {
+        assert_ne!(
+            endpoint_host_key("192.168.1.36:7878"),
+            endpoint_host_key("192.168.1.173:7878")
+        );
+    }
+}
+
 // -------- probe: capture a server's cert fingerprint without trusting it --------
 pub async fn probe_fingerprint(addr: &str, store: &KnownHostsStore) -> anyhow::Result<ProbeResult> {
     let socket = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(addr))
@@ -52,7 +69,7 @@ pub async fn probe_fingerprint(addr: &str, store: &KnownHostsStore) -> anyhow::R
     let leaf = certs.first().ok_or_else(|| anyhow::anyhow!("empty certificate chain"))?;
     let fingerprint = hex::encode(Sha256::digest(leaf.as_ref()));
 
-    let host_key = format!("{SERVER_NAME}");
+    let host_key = endpoint_host_key(addr);
     let status = match store.known_fingerprint(&host_key) {
         Some(known) if known == fingerprint => TrustStatus::Trusted,
         Some(known) => TrustStatus::Mismatch { expected: known },
@@ -73,7 +90,8 @@ pub async fn connect(addr: &str, store: Arc<KnownHostsStore>) -> anyhow::Result<
         .await
         .map_err(|_| anyhow::anyhow!("timed out connecting to {addr}"))??;
 
-    let config = crate::tls::build_strict_client_config(store);
+    let host_key = endpoint_host_key(addr);
+    let config = crate::tls::build_strict_client_config(store, host_key);
     let connector = TlsConnector::from(config);
     let server_name = ServerName::try_from(SERVER_NAME)?.to_owned();
 

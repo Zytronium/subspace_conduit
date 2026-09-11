@@ -12,11 +12,12 @@ use tracing::{info, warn};
 #[derive(Debug)]
 pub struct TofuVerifier {
     store: Arc<KnownHostsStore>,
+    host_key: String,
 }
 
 impl TofuVerifier {
-    pub fn new(store: Arc<KnownHostsStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<KnownHostsStore>, host_key: String) -> Self {
+        Self { store, host_key }
     }
 }
 
@@ -30,30 +31,29 @@ impl ServerCertVerifier for TofuVerifier {
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         let fingerprint = hex::encode(Sha256::digest(end_entity.as_ref()));
-        let host_key = format!("{server_name:?}");
-
-        match self.store.known_fingerprint(&host_key) {
+        match self.store.known_fingerprint(&self.host_key) {
             Some(known) if known == fingerprint => Ok(ServerCertVerified::assertion()),
             Some(known) => {
                 let reason = format!(
-                    "fingerprint mismatch for {host_key}: expected {known}, got {fingerprint}. \
+                    "fingerprint mismatch for {}: expected {known}, got {fingerprint}. \
                      This could mean the server changed, or a man-in-the-middle attack."
+                    , self.host_key
                 );
                 warn!("{reason}");
                 Err(rustls::Error::General(reason))
             }
             None => {
-                if prompt_confirm(&host_key, &fingerprint) {
-                    if let Err(e) = self.store.trust(&host_key, &fingerprint) {
+                if prompt_confirm(&self.host_key, &fingerprint) {
+                    if let Err(e) = self.store.trust(&self.host_key, &fingerprint) {
                         let reason = format!("failed to save trust decision: {e}");
                         warn!("{reason}");
                         return Err(rustls::Error::General(reason));
                     }
-                    info!("trusted server {host_key} with fingerprint {fingerprint}");
+                    info!("trusted server {} with fingerprint {fingerprint}", self.host_key);
                     Ok(ServerCertVerified::assertion())
                 } else {
                     let reason = format!(
-                        "user declined to trust new server {host_key} with fingerprint {fingerprint}"
+                        "user declined to trust new server {} with fingerprint {fingerprint}", self.host_key
                     );
                     warn!("{reason}");
                     Err(rustls::Error::General(reason))
@@ -110,8 +110,8 @@ fn prompt_confirm(host_key: &str, fingerprint: &str) -> bool {
     matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-pub fn build_client_config(store: Arc<KnownHostsStore>) -> Arc<ClientConfig> {
-    let verifier = TofuVerifier::new(store);
+pub fn build_client_config(store: Arc<KnownHostsStore>, host_key: String) -> Arc<ClientConfig> {
+    let verifier = TofuVerifier::new(store, host_key);
     Arc::new(
         ClientConfig::builder()
             .dangerous()
