@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:all": "bash scripts/build-all.sh",
+    "build:linux": "bash scripts/build-linux.sh",
+    "build:windows": "bash scripts/build-windows.sh",
     "preview": "vite preview",
     "tauri": "tauri"
   },
