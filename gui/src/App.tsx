@@ -24,6 +24,25 @@ function formatBytes(n: number): string {
     return `${value.toFixed(1)} ${units[i]}`;
 }
 
+function joinRemotePath(parent: string, child: string): string {
+    if (parent === "." || parent === "") return child;
+    return `${parent.replace(/\/$/, "")}/${child}`;
+}
+
+function FileIcon({ isFolder }: { isFolder: boolean }) {
+    return isFolder ? (
+        <svg className="entry-icon folder-icon" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M5 12.5A3.5 3.5 0 0 1 8.5 9H19l4 5h16.5a3.5 3.5 0 0 1 3.5 3.5v18A3.5 3.5 0 0 1 39.5 39h-31A3.5 3.5 0 0 1 5 35.5v-23Z" />
+            <path className="icon-detail" d="M5 18h38" />
+        </svg>
+    ) : (
+        <svg className="entry-icon file-icon" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M12 5h17l10 10v28H12z" />
+            <path className="icon-detail" d="M29 5v11h10M18 27h14M18 34h10" />
+        </svg>
+    );
+}
+
 function App() {
     // -------- discovery / connection state --------
     const [servers, setServers] = useState<DiscoveredServer[]>([]);
@@ -151,11 +170,29 @@ function App() {
         }
     }
 
+    function handleOpenFolder(name: string) {
+        if (!sessionId) return;
+        void refreshListing(sessionId, joinRemotePath(currentPath, name));
+    }
+
+    function handleGoUp() {
+        if (!sessionId || currentPath === ".") return;
+        const parts = currentPath.split("/").filter(Boolean);
+        parts.pop();
+        void refreshListing(sessionId, parts.length ? parts.join("/") : ".");
+    }
+
+    function handleBreadcrumb(path: string) {
+        if (!sessionId || path === currentPath) return;
+        void refreshListing(sessionId, path);
+    }
+
     async function handleUpload() {
         if (!sessionId) return;
         const selected = await open({ multiple: false });
         if (!selected || Array.isArray(selected)) return;
-        const remoteName = selected.split(/[\\/]/).pop() ?? "uploaded_file";
+        const fileName = selected.split(/[\\/]/).pop() ?? "uploaded_file";
+        const remoteName = joinRemotePath(currentPath, fileName);
         pushLog(`Uploading ${remoteName}...`);
         try {
             await invoke("upload_file", { sessionId, local: selected, remote: remoteName, resume: false });
@@ -321,43 +358,55 @@ function App() {
 
                             {!probe && sessionId && (
                                 <>
-                                    <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
-                                        <button className="btn" onClick={() => refreshListing(sessionId, currentPath)}>
-                                            Refresh
-                                        </button>
-                                        <button className="btn btn-primary" onClick={handleUpload}>
-                                            Upload a file
-                                        </button>
+                                    <div className="browser-toolbar">
+                                        <div className="breadcrumbs" aria-label="Current folder">
+                                            <button className="breadcrumb" onClick={() => handleBreadcrumb(".")}>Home</button>
+                                            {currentPath !== "." && currentPath.split("/").filter(Boolean).map((part, index, parts) => {
+                                                const path = parts.slice(0, index + 1).join("/");
+                                                return (
+                                                    <span className="breadcrumb-segment" key={path}>
+                                                        <span className="breadcrumb-separator">/</span>
+                                                        <button className="breadcrumb" onClick={() => handleBreadcrumb(path)}>{part}</button>
+                                                    </span>
+                                                );
+                                            })}
+                                        </div>
+                                        <div className="browser-actions">
+                                            <button className="btn" onClick={handleGoUp} disabled={currentPath === "."}>
+                                                <span aria-hidden="true">↑</span> Up
+                                            </button>
+                                            <button className="btn" onClick={() => refreshListing(sessionId, currentPath)}>
+                                                Refresh
+                                            </button>
+                                            <button className="btn btn-primary" onClick={handleUpload}>
+                                                Upload a file
+                                            </button>
+                                        </div>
                                     </div>
-                                    <table className="file-table">
-                                        <thead>
-                                        <tr>
-                                            <th>Name</th>
-                                            <th>Size</th>
-                                            <th></th>
-                                        </tr>
-                                        </thead>
-                                        <tbody>
-                                        {entries.map((e) => (
-                                            <tr key={e.name}>
-                                                <td>
-                            <span className="file-name">
-                              <span className="file-kind">{e.is_dir ? "dir" : "file"}</span>
-                                {e.name}
-                            </span>
-                                                </td>
-                                                <td className="file-size">{e.is_dir ? "" : formatBytes(e.size)}</td>
-                                                <td>
+                                    <div className="file-grid">
+                                        {[...entries].sort((a, b) => Number(b.is_dir) - Number(a.is_dir) || a.name.localeCompare(b.name)).map((e) => {
+                                            const remotePath = joinRemotePath(currentPath, e.name);
+                                            return (
+                                                <article className={`file-card ${e.is_dir ? "folder-card" : ""}`} key={e.name}>
+                                                    <button
+                                                        className="entry-open"
+                                                        onClick={() => e.is_dir && handleOpenFolder(e.name)}
+                                                        disabled={!e.is_dir}
+                                                        aria-label={e.is_dir ? `Open ${e.name}` : e.name}
+                                                    >
+                                                        <FileIcon isFolder={e.is_dir} />
+                                                        <span className="entry-name" title={e.name}>{e.name}</span>
+                                                        <span className="entry-meta">{e.is_dir ? "Folder" : formatBytes(e.size)}</span>
+                                                    </button>
                                                     {!e.is_dir && (
-                                                        <button className="btn" onClick={() => handleDownload(e.name)}>
+                                                        <button className="entry-download" onClick={() => handleDownload(remotePath)}>
                                                             Download
                                                         </button>
                                                     )}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                        </tbody>
-                                    </table>
+                                                </article>
+                                            );
+                                        })}
+                                    </div>
                                     {entries.length === 0 && <div className="empty-state">This folder is empty.</div>}
                                 </>
                             )}
